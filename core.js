@@ -372,9 +372,9 @@
     app.innerHTML = `
       <header class="topbar">
         <a class="brand" href="#/home" aria-label="Home">
-          <img src="assets/igniter-logo.png" alt="IGNITER Ahmedabad">
+          <img src="igniter-logo.png" alt="IGNITER Ahmedabad">
           <span class="divider"></span>
-          <img class="gpbo" src="assets/gpbo-logo.png" alt="Sardardham GPBO Network">
+          <img class="gpbo" src="gpbo-logo.png" alt="Sardardham GPBO Network">
         </a>
         <nav class="topnav">${items.map((n) => `<a href="#/${n.r}" data-nav="${n.r}">${n.l}${n.r === "admin" ? badge : ""}</a>`).join("")}</nav>
         <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menu">☰</button>
@@ -441,10 +441,10 @@
   // ------------------------------------------------------------------
   function renderNotConfigured() {
     document.getElementById("app").innerHTML = `<div class="login-page"><div class="login-box card">
-      <div class="login-logos"><img src="assets/igniter-logo.png" alt="IGNITER"><img class="gpbo" src="assets/gpbo-logo.png" alt="GPBO"></div>
+      <div class="login-logos"><img src="igniter-logo.png" alt="IGNITER"><img class="gpbo" src="gpbo-logo.png" alt="GPBO"></div>
       <h2>Almost ready!</h2>
       <p>The website is not connected to Supabase yet.</p>
-      <p>Open the file <b>js/config.js</b> and paste your <b>Project URL</b> and <b>anon public key</b>. (See the setup guide, Step 10–11.)</p>
+      <p>Open the file <b>config.js</b> and paste your <b>Project URL</b> and <b>anon public key</b>. (See the setup guide, Step 10–11.)</p>
       ${typeof window.supabase === "undefined" ? '<div class="notice bad">The Supabase library could not load. Check your internet connection.</div>' : ""}
     </div></div>`;
   }
@@ -452,7 +452,7 @@
   function renderLogin(message) {
     document.getElementById("app").innerHTML = `
       <div class="login-page"><div class="login-box">
-        <div class="login-logos"><img src="assets/igniter-logo.png" alt="IGNITER Ahmedabad"><img class="gpbo" src="assets/gpbo-logo.png" alt="Sardardham GPBO Network"></div>
+        <div class="login-logos"><img src="igniter-logo.png" alt="IGNITER Ahmedabad"><img class="gpbo" src="gpbo-logo.png" alt="Sardardham GPBO Network"></div>
         <div class="league-title"><div class="l1">IGNITER</div><div class="l2">BUSINESS &amp; P2P LEAGUE</div>
           <div class="tagline">CONNECT MORE • REFER MORE • SUPPORT MORE • GROW TOGETHER</div></div>
         <form class="card" id="login-form" autocomplete="on">
