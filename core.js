@@ -28,6 +28,8 @@
   };
   App.catLabel = (c) => (App.rulesMap && App.rulesMap[c] && App.rulesMap[c].label) || (App.CATS[c] && App.CATS[c].label) || c;
   App.catIcon = (c) => (App.CATS[c] && App.CATS[c].icon) || "•";
+  // Label for one entry (P2P shows Inside / Outside wing)
+  App.txnLabel = (t) => App.catLabel(t.category === "p2p" && t.p2p_scope === "outside" ? "p2p_outside" : t.category);
 
   // ------------------------------------------------------------------
   // Small helpers
@@ -99,6 +101,22 @@
     return res.data;
   };
   App.rpc = (fn, args) => App.q(App.sb.rpc(fn, args || {}));
+
+  // Speed: remember results for a short time so moving between pages is instant.
+  // (Admin actions call App.clearCache() so changes show immediately.)
+  const memo = {};
+  App.cachedRpc = (fn, args, ttlMs) => {
+    const key = fn + JSON.stringify(args || {});
+    const hit = memo[key];
+    if (hit && Date.now() - hit.t < (ttlMs || 30000)) return hit.p;
+    const p = App.rpc(fn, args);
+    memo[key] = { t: Date.now(), p };
+    p.catch(() => delete memo[key]);
+    return p;
+  };
+  App.clearCache = () => { Object.keys(memo).forEach((k) => delete memo[k]); };
+
+  App.FOOTER = "This website is designed and developed by Jaydeep Patel.";
 
   // Call the secure admin Edge Function
   App.adminFn = async (action, payload) => {
@@ -324,13 +342,16 @@
   App.pointsText = (code) => {
     const r = App.rulesMap && App.rulesMap[code];
     if (!r) return "";
-    if (r.unit_amount) return `${r.points} pt per ${App.fmtINR(r.unit_amount)}`;
+    if (r.unit_amount) return `${r.points} pt per ${App.fmtINR(r.unit_amount)}${r.max_points ? ` (max ${r.max_points})` : ""}`;
     return `+${r.points} pts`;
   };
   App.calcPoints = (code, amount) => {
     const r = App.rulesMap && App.rulesMap[code];
     if (!r) return 0;
-    if (r.unit_amount) return Math.floor((Number(amount) || 0) / Number(r.unit_amount)) * r.points;
+    if (r.unit_amount) {
+      const pts = Math.floor((Number(amount) || 0) / Number(r.unit_amount)) * r.points;
+      return r.max_points ? Math.min(pts, r.max_points) : pts;
+    }
     return r.points;
   };
 
@@ -382,6 +403,7 @@
       ${s.test_mode ? '<div class="test-banner">TEST MODE — sample data may be visible. (Admin can switch this off in Settings.)</div>' : ""}
       ${s.announcement ? `<div class="announce">${esc(s.announcement)}</div>` : ""}
       <main id="view"></main>
+      <footer class="site-footer">${esc(App.FOOTER)}</footer>
       <nav class="bottomnav">
         <a href="#/home" data-nav="home"><span class="ico">🏠</span>Home</a>
         <a href="#/leaderboard" data-nav="leaderboard"><span class="ico">🏆</span>Board</a>
@@ -466,6 +488,7 @@
           <button class="btn block lg" id="lg-btn" type="submit">Login</button>
           <p class="small muted center mt">Forgot password? Please contact the League Admin.<br>Admin uses the same login screen.</p>
         </form>
+        <p class="login-footer">${esc(App.FOOTER)}</p>
       </div></div>`;
     App.$("#lg-eye").onclick = () => { const p = App.$("#lg-pass"); p.type = p.type === "password" ? "text" : "password"; };
     App.$("#login-form").onsubmit = async (e) => {
@@ -492,11 +515,14 @@
 
   async function afterLogin() {
     const uid = App.session.user.id;
+    // profile + league data load at the same time (faster)
+    const baseP = App.loadBase().then(() => null, (e) => e);
     const prof = await App.q(App.sb.from("profiles").select("*").eq("id", uid).maybeSingle());
     if (!prof) { await App.sb.auth.signOut(); App.session = null; return renderLogin("Your profile was not found. Please contact the League Admin."); }
     if (!prof.is_active) { await App.sb.auth.signOut(); App.session = null; return renderLogin("Your account is disabled. Please contact the League Admin."); }
     App.profile = prof;
-    await App.loadBase();
+    const baseErr = await baseP;
+    if (baseErr) throw baseErr;
     if (!location.hash || location.hash === "#/" || location.hash === "#/login") location.hash = "#/home";
     App.$("#view") && App.$("#view").remove();
     renderShell();
@@ -510,6 +536,7 @@
   App.logout = async () => {
     try { await App.sb.auth.signOut(); } catch (_) { /* ignore */ }
     App.session = null; App.profile = null;
+    App.clearCache();
     location.hash = "#/login";
     renderLogin();
   };

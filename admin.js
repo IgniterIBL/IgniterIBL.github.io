@@ -62,13 +62,17 @@
       <div id="admin-main">${App.loadingHTML}</div></div>`;
     const active = App.$(".admin-menu a.active", el);
     if (active && window.innerWidth < 1000) active.scrollIntoView({ block: "nearest", inline: "center" });
-    await Promise.all([loadProfiles(), App.loadBase()]);
+    // Speed: member list + settings are re-loaded only after a change, or every 2 minutes
+    if (App.adminStale !== false || Date.now() - (App.adminLoadedAt || 0) > 120000) {
+      await Promise.all([loadProfiles(), App.loadBase()]);
+      App.adminLoadedAt = Date.now(); App.adminStale = false;
+    }
     if (App.stale(token)) return;
     const main = App.$("#admin-main", el);
     await ADMIN[sec](main, parts.slice(1), token);
   }, { admin: true });
 
-  const reloadSection = () => App.render();
+  const reloadSection = () => { App.adminStale = true; App.clearCache(); App.render(); };
 
   const ADMIN = {};
 
@@ -149,7 +153,7 @@
     const bad = creds.filter((c) => !c.password || c.error);
     const div = document.createElement("div");
     div.innerHTML = `
-      ${ok.length ? `<div class="notice warn"><b>IMPORTANT:</b> These passwords are shown <b>only once</b> and are not stored anywhere. Click <b>Download credentials (CSV)</b> now and keep the file private.</div>` : ""}
+      ${ok.length ? `<div class="notice">Every member starts with the password <b>${esc(ok[0].password)}</b>. They can change it after logging in (Profile → Change Password). Use <b>Copy message</b> or <b>WhatsApp</b> to send each member their login.</div>` : ""}
       ${bad.length ? `<div class="notice bad"><b>${bad.length} problem(s):</b><br>${bad.map((b) => `${esc(b.full_name)}${b.username ? " (" + esc(b.username) + ")" : ""}: ${esc(b.error || "")}`).join("<br>")}</div>` : ""}
       ${ok.length ? `<div class="table-wrap"><table class="rt cred-table"><thead><tr><th>Name</th><th>Username</th><th>Password</th><th></th></tr></thead><tbody>
         ${ok.map((c, i) => `<tr><td data-label="Name">${esc(c.full_name)}</td><td data-label="Username"><b>${esc(c.username)}</b></td><td data-label="Password"><b>${esc(c.password)}</b></td>
@@ -211,6 +215,7 @@
         <div class="row"><button class="btn green sm" id="mb-add">＋ Add member</button><button class="btn sm" id="mb-import">⬆ Import members CSV</button>
         <button class="btn ghost sm" id="mb-export">⬇ Export CSV</button></div></div>
       <div class="row mb"><input type="search" class="grow" id="mb-search" placeholder="🔍 Search name, username, group…" style="max-width:360px">
+        <button class="btn ghost sm" id="mb-reset-all">Reset ALL passwords to 123456</button>
         <button class="btn ghost sm" id="mb-sample">Create sample members</button><button class="btn ghost sm red-text" id="mb-del-sample">Delete all sample members</button></div>
       <div id="mb-list"></div>`;
     const draw = () => {
@@ -233,7 +238,7 @@
       App.$$("[data-edit]", el).forEach((b) => (b.onclick = () => editMember(App.profileMap[b.dataset.edit])));
       App.$$("[data-reset]", el).forEach((b) => (b.onclick = async () => {
         const p = App.profileMap[b.dataset.reset];
-        if (!(await App.confirm(`Create a NEW temporary password for <b>${esc(p.full_name)}</b>? The old password will stop working.`))) return;
+        if (!(await App.confirm(`Reset the password of <b>${esc(p.full_name)}</b> to the starting password <b>123456</b>? Their current password will stop working.`))) return;
         try { const r = await App.adminFn("reset_password", { user_id: p.id }); showCredentials([r]); } catch (e) { App.toast(App.errMsg(e), "bad"); }
       }));
       App.$$("[data-active]", el).forEach((b) => (b.onclick = async () => {
@@ -284,6 +289,19 @@
       { k: "is_new_member", l: "New Member", f: (r) => (r.is_new_member ? "Yes" : "No") }, { k: "role", l: "Role" }, { k: "is_sample", l: "Sample", f: (r) => (r.is_sample ? "Yes" : "No") },
     ]);
     App.$("#mb-import", el).onclick = importMembers;
+    App.$("#mb-reset-all", el).onclick = async () => {
+      const n = App.profiles.filter((p) => p.role === "member").length;
+      const typed = await App.prompt({ title: "Reset ALL member passwords", message: `This sets the password of all <b>${n}</b> members to <b>123456</b>. Passwords members chose themselves will stop working. (Your admin password is not changed.)`, label: "Type RESET to confirm", ok: "Reset all", danger: true });
+      if (typed === null) return;
+      if (typed !== "RESET") return App.toast("Not changed (you did not type RESET).", "bad");
+      App.toast("Resetting passwords… this can take up to a minute.");
+      try {
+        const r = await App.adminFn("reset_all_passwords");
+        App.toast(`Done: ${r.done} members now use password ${r.password}.`, "good");
+        if (r.errors && r.errors.length) App.toast(r.errors.slice(0, 3).join("; "), "bad");
+        reloadSection();
+      } catch (e) { App.toast(App.errMsg(e), "bad"); }
+    };
   };
 
   async function editMember(p) {
@@ -381,6 +399,7 @@
 
     const load = async () => {
       App.$("#tx-list", el).innerHTML = App.loadingHTML;
+      App.clearCache();
       let q = App.sb.from("v_transactions").select("*").in("category", st.cat ? [st.cat] : cfg.cats);
       if (st.status) q = q.eq("status", st.status);
       q = q.order("created_at", { ascending: st.status === "pending" }).limit(1000);
@@ -390,7 +409,7 @@
       if (vids.length) (await App.q(App.sb.from("visitors").select("*").in("id", vids))).forEach((v) => (visitors[v.id] = v));
       challenges = {};
       if (data.some((t) => t.challenge_id)) (await App.q(App.sb.from("special_challenges").select("id,name,points"))).forEach((c) => (challenges[c.id] = c));
-      urls = await App.signedUrls(data.slice(0, 200).map((t) => t.photo_path));
+      urls = await App.signedUrls(data.slice(0, 200).flatMap((t) => [t.photo_path, t.app_screenshot_path]));
       draw();
     };
 
@@ -402,13 +421,14 @@
         const v = visitors[t.visitor_id], ch = challenges[t.challenge_id];
         const locked = t.week_no && (App.weeks.find((w) => w.week_no === t.week_no) || {}).locked;
         return `<div class="item ${t.status === "pending" ? "appr" : ""}">
-          <div class="item-head"><div><div class="t">${App.catIcon(t.category)} ${esc(App.catLabel(t.category))} ${App.statusTag(t.status)}</div>
+          <div class="item-head"><div><div class="t">${App.catIcon(t.category)} ${esc(App.txnLabel(t))} ${App.statusTag(t.status)}</div>
             <div class="small muted">#${t.id} · submitted ${App.fmtDateTime(t.created_at)}</div></div>
             <div class="pts-badge" style="font-size:1.2rem">+${t.points}${t.points_override != null ? '<div class="small muted">manual</div>' : ""}</div></div>
           <div class="row" style="align-items:flex-start;flex-wrap:nowrap">
           <div class="kv grow">
             <div>Member</div><div><b>${esc(pName(t.member_id))}</b></div>
             ${t.partner_id ? `<div>${/received/.test(t.category) ? "From" : "With / To"}</div><div><b>${esc(pName(t.partner_id))}</b></div>` : ""}
+            ${t.partner_name ? `<div>With (outside)</div><div><b>${esc(t.partner_name)}</b>${t.partner_wing ? ` · ${esc(t.partner_wing)}` : ""}</div>` : ""}
             <div>Date</div><div>${App.fmtDate(t.txn_date)} · ${t.week_no ? `Week ${t.week_no}${t.week_override ? " (manual)" : ""}${locked ? " 🔒" : ""}` : '<b style="color:var(--red)">⚠ Outside league weeks (0 pts) — edit to set a week</b>'}</div>
             ${t.amount != null && /^biz_/.test(t.category) ? `<div>Amount</div><div><b>${App.fmtINR(t.amount)}</b></div>` : ""}
             ${t.description ? `<div>${t.category === "p2p" ? "Summary" : "Details"}</div><div>${esc(t.description)}</div>` : ""}
@@ -419,8 +439,11 @@
             ${t.reviewed_at ? `<div>Reviewed</div><div>${esc(pName(t.reviewed_by))} · ${App.fmtDateTime(t.reviewed_at)}</div>` : ""}
             ${t.reject_reason ? `<div>Reason</div><div style="color:var(--red)">${esc(t.reject_reason)}</div>` : ""}
           </div>
-          ${t.photo_path ? (urls[t.photo_path] ? `<img class="thumb" src="${esc(urls[t.photo_path])}" data-photo="${esc(t.photo_path)}" alt="P2P photo">` : `<button class="btn ghost sm" data-photo="${esc(t.photo_path)}">📷 View photo</button>`) : ""}
-          </div>
+          <div class="proofs">
+          ${t.photo_path ? (urls[t.photo_path] ? `<figure><img class="thumb" src="${esc(urls[t.photo_path])}" data-photo="${esc(t.photo_path)}" alt="Meeting photo"><figcaption>Meeting photo</figcaption></figure>` : `<button class="btn ghost sm" data-photo="${esc(t.photo_path)}">📷 View photo</button>`) : ""}
+          ${t.app_screenshot_path ? (urls[t.app_screenshot_path] ? `<figure><img class="thumb" src="${esc(urls[t.app_screenshot_path])}" data-photo="${esc(t.app_screenshot_path)}" alt="GPBO app screenshot"><figcaption>GPBO app</figcaption></figure>` : `<button class="btn ghost sm" data-photo="${esc(t.app_screenshot_path)}">📱 GPBO screenshot</button>`)
+            : (MEMBER_CATS.includes(t.category) && t.category !== "challenge" && t.created_by === t.member_id ? '<div class="small" style="color:var(--red)">No GPBO<br>screenshot</div>' : "")}
+          </div></div>
           ${t.doc_path ? `<button class="btn ghost sm mt" data-photo="${esc(t.doc_path)}">📎 View document</button>` : ""}
           <div class="actions">
             ${t.status !== "approved" ? `<button class="btn green" data-approve="${t.id}">✔ APPROVE</button>` : ""}
@@ -445,7 +468,7 @@
       App.$$("[data-edit]", el).forEach((b) => (b.onclick = () => editTxn(data.find((t) => t.id === Number(b.dataset.edit)), load)));
       App.$$("[data-del]", el).forEach((b) => (b.onclick = async () => {
         const t = data.find((x) => x.id === Number(b.dataset.del));
-        if (!(await App.confirm(`Delete this ${esc(App.catLabel(t.category))} entry of <b>${esc(pName(t.member_id))}</b> permanently? (It stays in the audit log.)`, { danger: true, ok: "Delete" }))) return;
+        if (!(await App.confirm(`Delete this ${esc(App.txnLabel(t))} entry of <b>${esc(pName(t.member_id))}</b> permanently? (It stays in the audit log.)`, { danger: true, ok: "Delete" }))) return;
         try { await App.q(App.sb.from("transactions").delete().eq("id", t.id)); App.toast("Deleted.", "good"); await load(); App.refreshPendingCount(); }
         catch (e) { App.toast(App.errMsg(e), "bad"); }
       }));
@@ -465,12 +488,14 @@
   const txnCsvCols = (visitors) => [
     { k: "id", l: "ID" }, { k: "txn_date", l: "Date" }, { k: "week_no", l: "Week" },
     { k: "member", l: "Member", f: (r) => pName(r.member_id) }, { k: "category", l: "Activity", f: (r) => App.catLabel(r.category) },
-    { k: "partner", l: "Other Member", f: (r) => (r.partner_id ? pName(r.partner_id) : "") }, { k: "amount", l: "Amount (Rs)" },
+    { k: "partner", l: "Other Member", f: (r) => (r.partner_id ? pName(r.partner_id) : r.partner_name ? `${r.partner_name} (${r.partner_wing || "outside wing"})` : "") },
+    { k: "p2p_scope", l: "P2P Type", f: (r) => (r.category === "p2p" ? (r.p2p_scope === "outside" ? "Outside wing" : "Inside wing") : "") }, { k: "amount", l: "Amount (Rs)" },
     { k: "description", l: "Details" }, { k: "customer_name", l: "Customer" }, { k: "notes", l: "Notes" },
     { k: "visitor", l: "Visitor", f: (r) => (visitors && visitors[r.visitor_id] ? visitors[r.visitor_id].visitor_name : "") },
     { k: "points", l: "Points" }, { k: "status", l: "Status" }, { k: "reject_reason", l: "Reject Reason" },
     { k: "created_at", l: "Submitted At" }, { k: "reviewed", l: "Reviewed By", f: (r) => (r.reviewed_by ? pName(r.reviewed_by) : "") }, { k: "reviewed_at", l: "Reviewed At" },
     { k: "photo_path", l: "Has Photo", f: (r) => (r.photo_path ? "Yes" : "") },
+    { k: "app_screenshot_path", l: "Has GPBO Screenshot", f: (r) => (r.app_screenshot_path ? "Yes" : "") },
   ];
 
   function txnFormHTML(t, cats, isNew) {
@@ -479,10 +504,13 @@
     return `
       ${isNew ? `<label class="f"><span>Member (earns the points) <em>*</em></span>${memberSelect("e-member", t.member_id, { blank: "— Choose member —" })}</label>
         <label class="f"><span>Activity type</span><select id="e-cat">${cats.map((c) => `<option value="${c}" ${c === cat ? "selected" : ""}>${esc(App.catLabel(c))}</option>`).join("")}</select></label>`
-        : `<p><b>${App.catIcon(t.category)} ${esc(App.catLabel(t.category))}</b> — ${esc(pName(t.member_id))}</p>`}
+        : `<p><b>${App.catIcon(t.category)} ${esc(App.txnLabel(t))}</b> — ${esc(pName(t.member_id))}</p>`}
       <div class="form-grid two">
         <label class="f"><span>Date <em>*</em></span><input type="date" id="e-date" value="${esc(t.txn_date || App.todayISO())}"></label>
         <label class="f" id="e-partner-wrap"><span>Other member</span>${memberSelect("e-partner", t.partner_id, { blank: "— none —" })}</label>
+        ${cat === "p2p" ? `<label class="f"><span>P2P type</span><select id="e-scope"><option value="inside" ${t.p2p_scope !== "outside" ? "selected" : ""}>Inside wing</option><option value="outside" ${t.p2p_scope === "outside" ? "selected" : ""}>Outside wing</option></select></label>
+        <label class="f"><span>Outside member name (outside wing only)</span><input type="text" id="e-pname" value="${esc(t.partner_name || "")}"></label>
+        <label class="f"><span>Outside member wing (outside wing only)</span><input type="text" id="e-pwing" value="${esc(t.partner_wing || "")}"></label>` : ""}
         <label class="f" id="e-amount-wrap"><span>Amount (₹)</span><input type="number" id="e-amount" min="0" step="1" value="${t.amount != null ? esc(t.amount) : ""}"></label>
         <label class="f"><span>Customer / company</span><input type="text" id="e-customer" value="${esc(t.customer_name || "")}"></label>
       </div>
@@ -502,6 +530,12 @@
       customer_name: v("e-customer") || null, description: v("e-desc") || null, notes: v("e-notes") || null,
       week_override: v("e-week") ? Number(v("e-week")) : null, points_override: v("e-points") === "" ? null : Number(v("e-points")),
     };
+    if (App.$("#e-scope", w)) {
+      out.p2p_scope = v("e-scope");
+      out.partner_name = out.p2p_scope === "outside" ? v("e-pname") || null : null;
+      out.partner_wing = out.p2p_scope === "outside" ? v("e-pwing") || null : null;
+      if (out.p2p_scope === "outside") { out.partner_id = null; if (!out.partner_name) throw new Error("Enter the outside member name."); }
+    }
     if (!out.txn_date) throw new Error("Please choose a date.");
     return out;
   }
@@ -533,7 +567,9 @@
         row.member_id = App.$("#e-member", w).value;
         row.category = App.$("#e-cat", w).value;
         if (!row.member_id) { App.toast("Please choose the member.", "bad"); return false; }
-        if (row.category !== "challenge" && !row.partner_id) { App.toast("Please choose the other member.", "bad"); return false; }
+        if (row.category === "p2p" && row.p2p_scope === "outside") row.partner_id = null;
+        else if (row.category !== "challenge" && !row.partner_id) { App.toast("Please choose the other member.", "bad"); return false; }
+        if (row.category !== "p2p") { delete row.p2p_scope; delete row.partner_name; delete row.partner_wing; }
         if (row.partner_id === row.member_id) { App.toast("Member and other member cannot be the same.", "bad"); return false; }
         if (/^biz_/.test(row.category) && !(row.amount > 0)) { App.toast("Please enter the amount.", "bad"); return false; }
         if (!/^biz_/.test(row.category)) row.amount = null;
@@ -760,7 +796,7 @@
       <label class="f"><span>Description</span><textarea id="c-desc" placeholder="e.g. Meet 5 different members this week">${esc(c.description || "")}</textarea></label>
       <div class="form-grid two">
         <label class="f"><span>Week</span><select id="c-week"><option value="">Any / by date</option>${App.weeks.map((w) => `<option value="${w.week_no}" ${c.week_no === w.week_no ? "selected" : ""}>Week ${w.week_no}</option>`).join("")}</select></label>
-        <label class="f"><span>Points</span><select id="c-points">${[10, 15, 20, 25, 30].map((p) => `<option ${c.points === p ? "selected" : ""}>${p}</option>`).join("")}</select></label>
+        <label class="f"><span>Points (1 – 150)</span><input type="number" id="c-points" min="1" max="150" step="1" value="${c.points}"></label>
         <label class="f"><span>Start date</span><input type="date" id="c-start" value="${esc(c.start_date || "")}"></label>
         <label class="f"><span>End date</span><input type="date" id="c-end" value="${esc(c.end_date || "")}"></label>
       </div>
@@ -769,6 +805,7 @@
       const r = { name: App.$("#c-name", w).value.trim(), description: App.$("#c-desc", w).value.trim() || null, week_no: App.$("#c-week", w).value ? Number(App.$("#c-week", w).value) : null,
         points: Number(App.$("#c-points", w).value), start_date: App.$("#c-start", w).value || null, end_date: App.$("#c-end", w).value || null, is_active: App.$("#c-active", w).checked };
       if (!r.name) throw new Error("Please enter the challenge name.");
+      if (!Number.isInteger(r.points) || r.points < 1 || r.points > 150) throw new Error("Challenge points must be a whole number from 1 to 150.");
       if (r.start_date && r.end_date && r.end_date < r.start_date) throw new Error("End date is before start date.");
       if (r.week_no && !r.start_date) { const wk = App.weeks.find((x) => x.week_no === r.week_no); r.start_date = wk.start_date; r.end_date = r.end_date || wk.end_date; }
       return r;
@@ -807,7 +844,8 @@
       App.q(App.sb.from("v_transactions").select("id,week_no").eq("status", "pending")),
     ]);
     const lbs = {};
-    for (const w of App.weeks) if (!w.locked) lbs[w.week_no] = await App.rpc("get_leaderboard", { p_week: w.week_no });
+    const open = App.weeks.filter((w) => !w.locked);
+    (await Promise.all(open.map((w) => App.rpc("get_leaderboard", { p_week: w.week_no })))).forEach((d, i) => (lbs[open[i].week_no] = d));
     const today = App.todayISO();
     el.innerHTML = `<h2>🎖️ Weekly Winners</h2>
       <div class="notice small">At the end of each week: approve all pending entries for that week, then click <b>LOCK WEEK</b>. Locking saves the winner and freezes that week's points so results cannot accidentally change. Only you can unlock.</div>
@@ -1021,15 +1059,17 @@
         <p class="small muted">Every activity is placed in a week automatically by its date. Locked weeks cannot be changed.</p>
 
         <h3 class="mt">🔢 Point values</h3>
-        <table class="rt"><thead><tr><th>Activity</th><th>Points</th><th>Per amount (₹)</th></tr></thead><tbody>
+        <table class="rt"><thead><tr><th>Activity</th><th>Points</th><th>Per amount (₹)</th><th>Max points per entry</th></tr></thead><tbody>
           ${App.rules.filter((r) => r.code !== "challenge").map((r) => `<tr><td data-label="Activity">${App.catIcon(r.code)} <input type="text" data-rl="${r.code}" value="${esc(r.label)}" style="max-width:260px"></td>
             <td data-label="Points"><input type="number" data-rp="${r.code}" value="${r.points}" min="0" step="1" style="max-width:110px"></td>
-            <td data-label="Per ₹">${r.unit_amount != null ? `<input type="number" data-ru="${r.code}" value="${Number(r.unit_amount)}" min="1" step="1" style="max-width:150px">` : '<span class="muted">—</span>'}</td></tr>`).join("")}</tbody></table>
-        <p class="small muted">Special Challenge points (10–30) are set on each challenge. Changing values here recalculates everyone's points (except locked weeks' saved winners).</p>
+            <td data-label="Per ₹">${r.unit_amount != null ? `<input type="number" data-ru="${r.code}" value="${Number(r.unit_amount)}" min="1" step="1" style="max-width:150px">` : '<span class="muted">—</span>'}</td>
+            <td data-label="Max pts">${r.unit_amount != null ? `<input type="number" data-rm="${r.code}" value="${r.max_points != null ? r.max_points : ""}" min="1" step="1" placeholder="No limit" style="max-width:130px">` : '<span class="muted">—</span>'}</td></tr>`).join("")}</tbody></table>
+        <p class="small muted">Special Challenge points (up to 150) are set on each challenge. Changing values here recalculates everyone's points (except locked weeks' saved winners).</p>
 
         <h3 class="mt">🧩 Options</h3>
         <label class="f"><span>A member counts as “new” for this many days after their induction date</span><input type="number" id="s-newdays" value="${s.new_member_days}" min="0" max="3650" style="max-width:140px"><small>You can also tick “New member” on each member in Admin → Members.</small></label>
         <label class="check"><input type="checkbox" id="s-claims" ${s.allow_challenge_claims ? "checked" : ""}> Members can claim special challenges (you approve them)</label>
+        <label class="check"><input type="checkbox" id="s-shot" ${s.require_app_screenshot !== false ? "checked" : ""}> Members must upload a screenshot of the entry from the GPBO app (P2P, references, business, visitors, new member)</label>
         <label class="check"><input type="checkbox" id="s-test" ${s.test_mode ? "checked" : ""}> TEST MODE banner (switch off when the real league starts)</label>
         <label class="f mt"><span>Announcement (shown at the top for everyone; leave blank for none)</span><input type="text" id="s-ann" value="${esc(s.announcement || "")}" placeholder="e.g. Week 2 challenge is live! ⚡"></label>
         <div id="s-err" class="notice bad hidden"></div>
@@ -1075,6 +1115,9 @@
         const upd = { code: r.code, label: App.$(`[data-rl="${r.code}"]`, el).value.trim() || r.label, points: Number(App.$(`[data-rp="${r.code}"]`, el).value) };
         const u = App.$(`[data-ru="${r.code}"]`, el);
         if (u) upd.unit_amount = Number(u.value);
+        const mx = App.$(`[data-rm="${r.code}"]`, el);
+        if (mx) upd.max_points = mx.value === "" ? null : Number(mx.value);
+        if (mx && upd.max_points !== null && !(Number.isInteger(upd.max_points) && upd.max_points > 0)) problems.push(`${upd.label}: max points must be a whole number above 0 (or empty for no limit).`);
         if (!Number.isInteger(upd.points) || upd.points < 0) problems.push(`${upd.label}: points must be a whole number (0 or more).`);
         if (u && !(upd.unit_amount > 0)) problems.push(`${upd.label}: amount must be more than 0.`);
         return upd;
@@ -1086,6 +1129,7 @@
       try {
         await App.q(App.sb.from("league_settings").update({ start_date: start, end_date: end, new_member_days: newDays,
           allow_challenge_claims: App.$("#s-claims", el).checked, test_mode: App.$("#s-test", el).checked,
+          require_app_screenshot: App.$("#s-shot", el).checked,
           announcement: App.$("#s-ann", el).value.trim() || null, updated_at: new Date().toISOString() }).eq("id", 1));
         for (const w of weeks) {
           const old = App.weeks.find((x) => x.week_no === w.week_no);
@@ -1094,9 +1138,11 @@
         }
         for (const r of rules) {
           const old = App.rulesMap[r.code];
-          if (old.label !== r.label || old.points !== r.points || (r.unit_amount !== undefined && Number(old.unit_amount) !== r.unit_amount)) {
+          if (old.label !== r.label || old.points !== r.points || (r.unit_amount !== undefined && Number(old.unit_amount) !== r.unit_amount)
+              || (r.max_points !== undefined && (old.max_points == null ? null : old.max_points) !== r.max_points)) {
             const upd = { label: r.label, points: r.points };
             if (r.unit_amount !== undefined) upd.unit_amount = r.unit_amount;
+            if (r.max_points !== undefined) upd.max_points = r.max_points;
             await App.q(App.sb.from("point_rules").update(upd).eq("code", r.code));
           }
         }
