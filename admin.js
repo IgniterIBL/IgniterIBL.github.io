@@ -11,6 +11,7 @@
   const SECTIONS = [
     { k: "overview", l: "📋 Overview" },
     { k: "members", l: "👥 Members" },
+    { k: "directory", l: "📇 GPBO Directory (P2P)" },
     { k: "approvals", l: "🔴 Pending Approvals", badge: true },
     { k: "p2p", l: "🤝 P2P Approvals" },
     { k: "business", l: "💼 Business" },
@@ -19,6 +20,7 @@
     { k: "visitors", l: "🙋 Visitors" },
     { k: "attendance", l: "✅ Attendance" },
     { k: "activities", l: "🏭 Activities" },
+    { k: "groupmeetings", l: "👥 Group Meetings" },
     { k: "challenges", l: "⚡ Special Challenges" },
     { k: "weekly", l: "🎖️ Weekly Winners" },
     { k: "awards", l: "🏁 Final Awards & Prizes" },
@@ -378,6 +380,109 @@
   }
 
   // ==================================================================
+  // GPBO MEMBERS DIRECTORY (all wings) — only used to pick the person met in an outside-wing P2P
+  // ==================================================================
+  ADMIN.directory = async (el) => {
+    const list = await App.rpc("list_gpbo_directory");
+    const wings = Array.from(new Set(list.map((d) => d.wing))).sort();
+    let search = "";
+    el.innerHTML = `<div class="card-title"><h2>📇 GPBO Members Directory</h2>
+        <div class="row"><button class="btn sm" id="dr-upload">⬆ Upload directory CSV</button><button class="btn green sm" id="dr-add">＋ Add one</button>
+        <button class="btn ghost sm" id="dr-csv">⬇ Export CSV</button></div></div>
+      <div class="notice small">This is a <b>separate list of ALL GPBO members (every wing)</b>. Members use it only to choose who they met in an <b>Outside-wing P2P</b>.
+        People in this list do <b>not</b> log in and do <b>not</b> earn points. (Igniter members who log in and earn points are managed in <a href="#/admin/members">Members</a>.)</div>
+      <div class="stat-grid"><div class="stat"><div class="k">People in directory</div><div class="v">${list.length}</div></div><div class="stat"><div class="k">Wings</div><div class="v">${wings.length}</div></div></div>
+      <div class="row mb"><input type="search" id="dr-search" class="grow" placeholder="🔍 Search name, wing, company…" style="max-width:380px">
+        <button class="btn ghost sm red-text" id="dr-clear">Delete entire directory</button></div>
+      <div id="dr-list"></div>`;
+    const draw = () => {
+      const words = search.toLowerCase().split(/\s+/).filter(Boolean);
+      const rows = list.filter((d) => { const s = `${d.full_name} ${d.wing} ${d.company || ""}`.toLowerCase(); return words.every((w) => s.includes(w)); });
+      App.$("#dr-list", el).innerHTML = rows.length ? `<p class="small muted">${rows.length} found${rows.length > 300 ? " (showing the first 300 — search to narrow down)" : ""}</p>
+        <table class="rt"><thead><tr><th>Name</th><th>Wing</th><th>Company / Business</th><th></th></tr></thead><tbody>
+        ${rows.slice(0, 300).map((d) => `<tr><td data-label="Name"><b>${esc(d.full_name)}</b></td><td data-label="Wing">${esc(d.wing)}</td><td data-label="Company">${esc(d.company || "—")}</td>
+          <td class="no-label"><button class="btn ghost sm red-text" data-del="${d.id}">Remove</button></td></tr>`).join("")}</tbody></table>`
+        : `<div class="empty">${list.length ? "No match." : "The directory is empty. Click “Upload directory CSV”."}</div>`;
+      App.$$("[data-del]", el).forEach((b) => (b.onclick = async () => {
+        const d = list.find((x) => String(x.id) === b.dataset.del);
+        if (!(await App.confirm(`Remove <b>${esc(d.full_name)}</b> (${esc(d.wing)}) from the directory? Past P2P entries keep the name.`, { danger: true, ok: "Remove" }))) return;
+        try { await App.q(App.sb.from("gpbo_directory").delete().eq("id", d.id)); App.toast("Removed.", "good"); reloadSection(); } catch (e) { App.toast(App.errMsg(e), "bad"); }
+      }));
+    };
+    App.$("#dr-search", el).oninput = (e) => { search = e.target.value; draw(); };
+    draw();
+
+    App.$("#dr-csv", el).onclick = () => App.downloadCSV(`gpbo-directory-${App.todayISO()}.csv`, list, [{ k: "full_name", l: "Name" }, { k: "wing", l: "Wing" }, { k: "company", l: "Company" }]);
+    App.$("#dr-clear", el).onclick = async () => {
+      const typed = await App.prompt({ title: "Delete entire directory", message: `This removes all <b>${list.length}</b> people from the GPBO directory. Past P2P entries keep the names. Points are NOT affected.`, label: "Type DELETE to confirm", ok: "Delete all", danger: true });
+      if (typed === null) return;
+      if (typed !== "DELETE") return App.toast("Not deleted (you did not type DELETE).", "bad");
+      try { const r = await App.rpc("admin_import_directory", { p_rows: [], p_replace: true }); App.toast(`Removed ${r.removed} people.`, "good"); App.clearCache(); reloadSection(); } catch (e) { App.toast(App.errMsg(e), "bad"); }
+    };
+    App.$("#dr-add", el).onclick = () => App.modal({
+      title: "Add a GPBO member to the directory",
+      body: `<label class="f"><span>Full name <em>*</em></span><input type="text" id="d-name"></label>
+        <label class="f"><span>Wing <em>*</em></span><input type="text" id="d-wing" list="d-wings"><datalist id="d-wings">${wings.map((w) => `<option value="${esc(w)}">`).join("")}</datalist></label>
+        <label class="f"><span>Company / business</span><input type="text" id="d-company"></label>`,
+      actions: [{ label: "Cancel", cls: "ghost", value: null }, { label: "Add", cls: "green", value: "ok" }],
+      onAction: async (v, w) => {
+        const row = { full_name: App.$("#d-name", w).value.trim(), wing: App.$("#d-wing", w).value.trim(), company: App.$("#d-company", w).value.trim() };
+        if (row.full_name.length < 2 || !row.wing) { App.toast("Enter the name and the wing.", "bad"); return false; }
+        const r = await App.rpc("admin_import_directory", { p_rows: [row], p_replace: false });
+        App.toast(r.added ? "Added ✔" : "Already in the directory.", r.added ? "good" : "bad");
+        App.clearCache(); reloadSection(); return true;
+      },
+    });
+    App.$("#dr-upload", el).onclick = () => {
+      const div = document.createElement("div");
+      div.innerHTML = `<p>Upload a <b>.csv</b> file with these column headings in the first row:</p>
+        <p><code>Name, Wing, Company</code></p>
+        <p class="small muted"><b>Name</b> and <b>Wing</b> are required; Company is optional. In Excel: File → Save As → “CSV UTF-8 (Comma delimited)”. The same name in the same wing is only added once.</p>
+        <p><button class="btn ghost sm" type="button" id="dr-tpl">⬇ Download template</button></p>
+        <label class="f"><span>Choose CSV file</span><input type="file" id="dr-file" accept=".csv,text/csv"></label>
+        <label class="check"><input type="checkbox" id="dr-replace"> Replace the current directory (delete the old list first)</label>
+        <div id="dr-prev" class="mt"></div>`;
+      let rows = [];
+      App.$("#dr-tpl", div).onclick = () => App.downloadCSV("gpbo-directory-template.csv", [{ Name: "Ramesh Shah", Wing: "Main Wing", Company: "Shah Industries" }]);
+      App.$("#dr-file", div).onchange = async (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const grid = App.parseCSV(await f.text());
+        const prev = App.$("#dr-prev", div);
+        rows = [];
+        if (grid.length < 2) { prev.innerHTML = '<div class="notice bad">The file seems empty.</div>'; return; }
+        const head = grid[0].map((h) => h.trim().toLowerCase().replace(/[^a-z]/g, ""));
+        const col = (...n) => head.findIndex((h) => n.includes(h));
+        const ci = { name: col("name", "membername", "fullname"), wing: col("wing", "wingname", "chapter"), company: col("company", "companyname", "business", "firm") };
+        if (ci.name < 0 || ci.wing < 0) { prev.innerHTML = '<div class="notice bad">The first row must contain “Name” and “Wing” columns.</div>'; return; }
+        const g = (r, i) => (i >= 0 ? String(r[i] || "").trim() : "");
+        rows = grid.slice(1).map((r) => ({ full_name: g(r, ci.name), wing: g(r, ci.wing), company: g(r, ci.company) })).filter((r) => r.full_name);
+        const noWing = rows.filter((r) => !r.wing).length;
+        prev.innerHTML = `<div class="notice good"><b>${rows.length}</b> people found in <b>${new Set(rows.filter((r) => r.wing).map((r) => r.wing.toLowerCase())).size}</b> wings.</div>
+          ${noWing ? `<div class="notice warn">${noWing} row(s) have no wing and will be skipped.</div>` : ""}
+          <div class="table-wrap" style="max-height:30vh"><table class="rt"><thead><tr><th>Name</th><th>Wing</th><th>Company</th></tr></thead><tbody>
+          ${rows.slice(0, 50).map((r) => `<tr><td data-label="Name">${esc(r.full_name)}</td><td data-label="Wing">${esc(r.wing)}</td><td data-label="Company">${esc(r.company)}</td></tr>`).join("")}
+          </tbody></table></div>${rows.length > 50 ? `<p class="small muted">…and ${rows.length - 50} more</p>` : ""}`;
+      };
+      App.modal({
+        title: "Upload GPBO directory", wide: true, body: div,
+        actions: [{ label: "Cancel", cls: "ghost", value: null }, { label: "Upload", cls: "green", value: "go" }],
+        onAction: async () => {
+          if (!rows.length) { App.toast("Please choose a CSV file first.", "bad"); return false; }
+          const replace = App.$("#dr-replace", div).checked;
+          let added = 0, skipped = 0;
+          for (let i = 0; i < rows.length; i += 1000) {
+            const r = await App.rpc("admin_import_directory", { p_rows: rows.slice(i, i + 1000), p_replace: replace && i === 0 });
+            added += r.added; skipped += r.skipped;
+          }
+          App.toast(`Directory updated ✔ ${added} added${skipped ? `, ${skipped} skipped (already in the list or missing wing)` : ""}.`, "good");
+          App.clearCache(); reloadSection(); return true;
+        },
+      });
+    };
+  };
+
+  // ==================================================================
   // 3–7. TRANSACTION LISTS (approvals, P2P, business, references…)
   // ==================================================================
   const MEMBER_CATS = ["p2p", "new_member", "ref_given", "ref_received", "biz_given", "biz_received", "visitor", "challenge"];
@@ -428,7 +533,8 @@
           <div class="kv grow">
             <div>Member</div><div><b>${esc(pName(t.member_id))}</b></div>
             ${t.partner_id ? `<div>${/received/.test(t.category) ? "From" : "With / To"}</div><div><b>${esc(pName(t.partner_id))}</b></div>` : ""}
-            ${t.partner_name ? `<div>With (outside)</div><div><b>${esc(t.partner_name)}</b>${t.partner_wing ? ` · ${esc(t.partner_wing)}` : ""}</div>` : ""}
+            ${t.partner_name ? `<div>With (outside)</div><div><b>${esc(t.partner_name)}</b>${t.partner_wing ? ` · ${esc(t.partner_wing)}` : ""}
+              <div class="small" style="color:${t.gpbo_member_id ? "var(--muted)" : "var(--amber)"}">${t.gpbo_member_id ? "✔ chosen from GPBO directory" : "⚠ typed by member (not in GPBO directory)"}</div></div>` : ""}
             <div>Date</div><div>${App.fmtDate(t.txn_date)} · ${t.week_no ? `Week ${t.week_no}${t.week_override ? " (manual)" : ""}${locked ? " 🔒" : ""}` : '<b style="color:var(--red)">⚠ Outside league weeks (0 pts) — edit to set a week</b>'}</div>
             ${t.amount != null && /^biz_/.test(t.category) ? `<div>Amount</div><div><b>${App.fmtINR(t.amount)}</b></div>` : ""}
             ${t.description ? `<div>${t.category === "p2p" ? "Summary" : "Details"}</div><div>${esc(t.description)}</div>` : ""}
@@ -708,7 +814,8 @@
     el.innerHTML = `<div class="card-title"><h2>${cfg.title}</h2><div class="row"><button class="btn green sm" id="ev-add">＋ ${cfg.addLabel}</button><button class="btn ghost sm" id="ev-csv">⬇ Export CSV</button></div></div>
       <div class="notice small">${cfg.help}</div>
       ${events.length ? `<table class="rt"><thead><tr><th>${cfg.nameLabel}</th><th>Date</th><th>${cfg.countLabel}</th><th></th></tr></thead><tbody>
-      ${events.map((e) => `<tr><td data-label="${cfg.nameLabel}"><b>${esc(e.title)}</b>${e.activity_type ? `<div class="small muted">${esc(e.activity_type)}</div>` : ""}</td>
+      ${events.map((e) => `<tr><td data-label="${cfg.nameLabel}"><b>${esc(e.title)}</b>${e.activity_type ? `<div class="small muted">${esc(e.activity_type)}</div>` : ""}
+          ${cfg.leader ? `<div class="small">Leader: <b>${esc(e.leader_id ? pName(e.leader_id) : "— not set —")}</b> (+${(App.rulesMap.group_organize || {}).points} pts)${e.group_name ? ` · ${esc(e.group_name)}` : ""}</div>` : ""}</td>
         <td data-label="Date">${App.fmtDate(e[cfg.dateCol])}<div class="small muted">${App.weekForDate(e[cfg.dateCol]) ? "Week " + App.weekForDate(e[cfg.dateCol]) : "⚠ outside league weeks"}</div></td>
         <td data-label="${cfg.countLabel}"><b>${(byEvent[e.id] || new Set()).size}</b> members · +${(App.rulesMap[cfg.cat] || {}).points} pts each</td>
         <td class="no-label"><div class="row"><button class="btn sm" data-mark="${e.id}">${cfg.markLabel}</button><button class="btn ghost sm" data-edit="${e.id}">Edit</button><button class="btn ghost sm red-text" data-del="${e.id}">Delete</button></div></td></tr>`).join("")}
@@ -716,6 +823,8 @@
 
     const form = (e) => `<label class="f"><span>${cfg.nameLabel} <em>*</em></span><input type="text" id="ev-title" value="${esc(e ? e.title : cfg.defaultTitle)}"></label>
       ${cfg.table === "activities" ? `<label class="f"><span>Type</span><select id="ev-type">${ACTIVITY_TYPES.map((t) => `<option ${e && e.activity_type === t ? "selected" : ""}>${t}</option>`).join("")}</select></label>` : ""}
+      ${cfg.leader ? `<label class="f"><span>Group leader who organized it <em>*</em></span>${memberSelect("ev-leader", e ? e.leader_id : null, { blank: "— Choose leader —" })}</label>
+        <label class="f"><span>Group name</span><input type="text" id="ev-group" value="${esc(e ? e.group_name || "" : "")}"></label>` : ""}
       <label class="f"><span>Date <em>*</em></span><input type="date" id="ev-date" value="${esc(e ? e[cfg.dateCol] : App.todayISO())}"></label>
       <label class="f"><span>${cfg.table === "activities" ? "Description" : "Notes"}</span><input type="text" id="ev-desc" value="${esc(e ? (e.description || e.notes || "") : "")}"></label>`;
     const read = (w) => {
@@ -723,18 +832,31 @@
       row[cfg.dateCol] = App.$("#ev-date", w).value;
       if (cfg.table === "activities") { row.activity_type = App.$("#ev-type", w).value; row.description = App.$("#ev-desc", w).value.trim() || null; }
       else row.notes = App.$("#ev-desc", w).value.trim() || null;
+      if (cfg.leader) {
+        row.leader_id = App.$("#ev-leader", w).value || null;
+        row.group_name = App.$("#ev-group", w).value.trim() || null;
+        if (!row.leader_id) throw new Error("Please choose the group leader.");
+      }
       if (!row.title || !row[cfg.dateCol]) throw new Error("Please fill in the name and date.");
       return row;
     };
     App.$("#ev-add", el).onclick = () => App.modal({
       title: cfg.addLabel, body: form(null), actions: [{ label: "Cancel", cls: "ghost", value: null }, { label: "Create", cls: "green", value: "ok" }],
-      onAction: async (v, w) => { await App.q(App.sb.from(cfg.table).insert(read(w))); App.toast("Created ✔ — now tick the members.", "good"); reloadSection(); return true; },
+      onAction: async (v, w) => {
+        const created = await App.q(App.sb.from(cfg.table).insert(read(w)).select().single());
+        if (cfg.leader) await App.rpc(cfg.rpc, { [cfg.rpcArg]: created.id, p_member_ids: null });   // leader gets the organizer points
+        App.toast("Created ✔ — now tick the members.", "good"); reloadSection(); return true;
+      },
     });
     App.$$("[data-edit]", el).forEach((b) => (b.onclick = () => {
       const e = events.find((x) => x.id === Number(b.dataset.edit));
       App.modal({
         title: "Edit", body: form(e), actions: [{ label: "Cancel", cls: "ghost", value: null }, { label: "Save", value: "ok" }],
-        onAction: async (v, w) => { await App.q(App.sb.from(cfg.table).update(read(w)).eq("id", e.id)); App.toast("Saved ✔", "good"); reloadSection(); return true; },
+        onAction: async (v, w) => {
+          await App.q(App.sb.from(cfg.table).update(read(w)).eq("id", e.id));
+          if (cfg.leader) await App.rpc(cfg.rpc, { [cfg.rpcArg]: e.id, p_member_ids: null });   // move organizer points if leader changed
+          App.toast("Saved ✔", "good"); reloadSection(); return true;
+        },
       });
     }));
     App.$$("[data-del]", el).forEach((b) => (b.onclick = async () => {
@@ -752,7 +874,10 @@
     }));
     App.$("#ev-csv", el).onclick = () => {
       const rows = [];
-      events.forEach((e) => (byEvent[e.id] || new Set()).forEach((m) => rows.push({ event: e.title, type: e.activity_type || "", date: e[cfg.dateCol], member: pName(m) })));
+      events.forEach((e) => {
+        if (cfg.leader && e.leader_id) rows.push({ event: e.title, type: "Leader (organized)", date: e[cfg.dateCol], member: pName(e.leader_id) });
+        (byEvent[e.id] || new Set()).forEach((m) => rows.push({ event: e.title, type: e.activity_type || (cfg.leader ? "Attended" : ""), date: e[cfg.dateCol], member: pName(m) }));
+      });
       App.downloadCSV(`${cfg.table}-${App.todayISO()}.csv`, rows, [{ k: "event", l: cfg.nameLabel }, { k: "type", l: "Type" }, { k: "date", l: "Date" }, { k: "member", l: "Member" }]);
     };
   }
@@ -762,6 +887,13 @@
     rpc: "admin_set_attendance", rpcArg: "p_meeting_id", addLabel: "New meeting", nameLabel: "Meeting", defaultTitle: "Weekly Meeting",
     countLabel: "Present", markLabel: "✔ Mark attendance", checkHelp: "Tick everyone who attended. Unticking a member removes their attendance points for this meeting.",
     help: "Create each official weekly meeting, then tick who attended (bulk). Each attendance = +" + ((App.rulesMap.attendance || {}).points) + " points. Members cannot mark their own attendance.",
+  });
+  ADMIN.groupmeetings = (el) => eventSection(el, {
+    title: "👥 Group Meetings", table: "group_meetings", dateCol: "meeting_date", fk: "group_meeting_id", cat: "group_attend", leader: true,
+    rpc: "admin_set_group_attendance", rpcArg: "p_group_meeting_id", addLabel: "New group meeting", nameLabel: "Group meeting", defaultTitle: "Group Meeting",
+    countLabel: "Attended", markLabel: "✔ Mark attendees",
+    checkHelp: "Tick every group member who attended. (The leader already gets the organizer points and is not counted as an attendee.)",
+    help: "Create each group meeting and choose the <b>group leader</b> who organized it (+" + ((App.rulesMap.group_organize || {}).points) + " points). Then tick the members who attended (+" + ((App.rulesMap.group_attend || {}).points) + " points each).",
   });
   ADMIN.activities = (el) => eventSection(el, {
     title: "🏭 Activity Participation", table: "activities", dateCol: "activity_date", fk: "activity_id", cat: "activity",
@@ -1059,7 +1191,7 @@
         <p class="small muted">Every activity is placed in a week automatically by its date. Locked weeks cannot be changed.</p>
 
         <h3 class="mt">🔢 Point values</h3>
-        <table class="rt"><thead><tr><th>Activity</th><th>Points</th><th>Per amount (₹)</th><th>Max points per entry</th></tr></thead><tbody>
+        <table class="rt"><thead><tr><th>Activity</th><th>Points</th><th>Per amount (₹)</th><th>Max points in the league (per member)</th></tr></thead><tbody>
           ${App.rules.filter((r) => r.code !== "challenge").map((r) => `<tr><td data-label="Activity">${App.catIcon(r.code)} <input type="text" data-rl="${r.code}" value="${esc(r.label)}" style="max-width:260px"></td>
             <td data-label="Points"><input type="number" data-rp="${r.code}" value="${r.points}" min="0" step="1" style="max-width:110px"></td>
             <td data-label="Per ₹">${r.unit_amount != null ? `<input type="number" data-ru="${r.code}" value="${Number(r.unit_amount)}" min="1" step="1" style="max-width:150px">` : '<span class="muted">—</span>'}</td>
@@ -1117,7 +1249,7 @@
         if (u) upd.unit_amount = Number(u.value);
         const mx = App.$(`[data-rm="${r.code}"]`, el);
         if (mx) upd.max_points = mx.value === "" ? null : Number(mx.value);
-        if (mx && upd.max_points !== null && !(Number.isInteger(upd.max_points) && upd.max_points > 0)) problems.push(`${upd.label}: max points must be a whole number above 0 (or empty for no limit).`);
+        if (mx && upd.max_points !== null && !(Number.isInteger(upd.max_points) && upd.max_points > 0)) problems.push(`${upd.label}: the league maximum must be a whole number above 0 (or empty for no limit).`);
         if (!Number.isInteger(upd.points) || upd.points < 0) problems.push(`${upd.label}: points must be a whole number (0 or more).`);
         if (u && !(upd.unit_amount > 0)) problems.push(`${upd.label}: amount must be more than 0.`);
         return upd;

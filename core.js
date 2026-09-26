@@ -25,6 +25,8 @@
     attendance:   { icon: "✅", label: "Meeting Attendance" },
     activity:     { icon: "🏭", label: "Activity Participation" },
     challenge:    { icon: "⚡", label: "Special Challenge" },
+    group_organize: { icon: "👥", label: "Group Meeting Organized" },
+    group_attend:   { icon: "🙌", label: "Group Meeting Attended" },
   };
   App.catLabel = (c) => (App.rulesMap && App.rulesMap[c] && App.rulesMap[c].label) || (App.CATS[c] && App.CATS[c].label) || c;
   App.catIcon = (c) => (App.CATS[c] && App.CATS[c].icon) || "•";
@@ -342,7 +344,7 @@
   App.pointsText = (code) => {
     const r = App.rulesMap && App.rulesMap[code];
     if (!r) return "";
-    if (r.unit_amount) return `${r.points} pt per ${App.fmtINR(r.unit_amount)}${r.max_points ? ` (max ${r.max_points})` : ""}`;
+    if (r.unit_amount) return `${r.points} pt per ${App.fmtINR(r.unit_amount)}${r.max_points ? ` (max ${r.max_points} pts in the league)` : ""}`;
     return `+${r.points} pts`;
   };
   App.calcPoints = (code, amount) => {

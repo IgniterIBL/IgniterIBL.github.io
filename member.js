@@ -84,6 +84,8 @@
     { k: "attendance", l: "Attendance" },
     { k: "activities", l: "Activities" },
     { k: "challenges", l: "Special Challenge", pts: "challenge_points" },
+    { k: "group_organized", l: "Group Mtg Organized" },
+    { k: "group_attended", l: "Group Mtg Attended" },
   ];
   App.LB_COLS = LB_COLS;
   const lbState = { week: null, search: "", sort: "total_points", dir: -1, data: {} };
@@ -182,6 +184,7 @@
         { k: "biz_received_amount", l: "Business Received (Rs)" }, { k: "biz_received_points", l: "Business Received Points" },
         { k: "visitors", l: "Visitors" }, { k: "inductions", l: "Inductions" }, { k: "attendance", l: "Attendance" },
         { k: "activities", l: "Activity Participation" }, { k: "challenges", l: "Special Challenges" }, { k: "challenge_points", l: "Challenge Points" },
+        { k: "group_organized", l: "Group Meetings Organized" }, { k: "group_attended", l: "Group Meetings Attended" },
       ]);
     };
     lbState.data = {};
@@ -199,7 +202,7 @@
   // ==================================================================
   // MY PERFORMANCE (dashboard + point history)
   // ==================================================================
-  const CARD_ORDER = ["p2p", "new_member", "ref_given", "ref_received", "biz_given", "biz_received", "visitor", "induction", "attendance", "activity", "challenge"];
+  const CARD_ORDER = ["p2p", "new_member", "ref_given", "ref_received", "biz_given", "biz_received", "visitor", "induction", "attendance", "activity", "challenge", "group_organize", "group_attend"];
 
   App.txnDetails = (t, opts) => {
     opts = opts || {};
@@ -319,7 +322,7 @@
       <h2>➕ Submit Activity</h2>
       ${closedMsg ? `<div class="notice warn">${esc(closedMsg)}</div>` : ""}
       <div class="type-grid mb">${TYPES.map((x) => `<button type="button" class="type-tile ${type === x.t ? "active" : ""}" data-t="${x.t}"><span class="ic">${x.icon}</span><b>${x.l}</b><span>${esc(x.pts())}</span></button>`).join("")}</div>
-      <p class="small muted">Meeting Attendance and Activity Participation are marked by the Admin — you do not need to submit them.</p>
+      <p class="small muted">Meeting Attendance, Activity Participation and Group Meetings are marked by the Admin — you do not need to submit them.</p>
       <div id="form-area"></div>`;
     App.$$(".type-tile", el).forEach((b) => (b.onclick = () => App.go("#/submit/" + b.dataset.t)));
     if (!type || !HELP[type]) return;
@@ -347,10 +350,17 @@
       html = `<div class="seg" id="f-scope"><button type="button" class="active" data-v="inside">🏠 INSIDE wing (${esc(App.pointsText("p2p"))})</button><button type="button" data-v="outside">🌐 OUTSIDE wing (${esc(App.pointsText("p2p_outside"))})</button></div>
         ${dateField("Date of meeting")}
         <label class="f" id="f-inside"><span>Igniter member met <em>*</em></span><select id="f-partner" required>${memberOptions()}</select></label>
-        <div id="f-outside" class="hidden"><div class="form-grid two">
-          <label class="f"><span>Name of GPBO member met <em>*</em></span><input type="text" id="f-pname" placeholder="Full name"></label>
-          <label class="f"><span>Their GPBO wing <em>*</em></span><input type="text" id="f-pwing" placeholder="Name of their wing"></label>
-        </div></div>
+        <div id="f-outside" class="hidden">
+          <label class="f"><span>GPBO member met (any wing) <em>*</em></span>
+            <input type="search" id="f-dsearch" placeholder="🔍 Type name, wing or company…" autocomplete="off"></label>
+          <div id="f-dresults" class="dir-results"></div>
+          <div id="f-dchosen" class="notice good hidden"></div>
+          <button type="button" class="btn ghost sm mb" id="f-manual-btn">Not in the list? Type the name</button>
+          <div id="f-manual" class="hidden"><div class="form-grid two">
+            <label class="f"><span>Name of GPBO member met <em>*</em></span><input type="text" id="f-pname" placeholder="Full name"></label>
+            <label class="f"><span>Their GPBO wing <em>*</em></span><input type="text" id="f-pwing" placeholder="Name of their wing"></label>
+          </div></div>
+        </div>
         <label class="f"><span>Business discussion summary <em>*</em></span><textarea id="f-desc" placeholder="What did you discuss? Their business, requirements, ideal customers, how you can support each other…" required></textarea></label>
         <label class="f"><span>Notes (optional)</span><input type="text" id="f-notes"></label>
         ${photoPicker("photo", "Photograph of the meeting", true, "📷 Take / Choose Photo", "JPG, PNG or WEBP. Large photos are automatically reduced (max 5 MB).")}`;
@@ -425,7 +435,47 @@
       p2pScope = b.dataset.v;
       App.$("#f-inside", area).classList.toggle("hidden", p2pScope === "outside");
       App.$("#f-outside", area).classList.toggle("hidden", p2pScope !== "outside");
+      if (p2pScope === "outside") loadDirectory();
     }));
+    // ---- GPBO directory search (outside-wing P2P) ----
+    let directory = null, dirChoice = null, manual = false;
+    const dSearch = App.$("#f-dsearch", area), dResults = App.$("#f-dresults", area), dChosen = App.$("#f-dchosen", area);
+    const showResults = () => {
+      if (!directory || !dSearch) return;
+      const words = dSearch.value.toLowerCase().split(/\s+/).filter(Boolean);
+      if (!words.length) { dResults.innerHTML = `<div class="small muted">${directory.length ? `Start typing to search ${directory.length} GPBO members.` : "The GPBO directory is empty. Use “Not in the list? Type the name”."}</div>`; return; }
+      const hits = directory.filter((d) => { const s = `${d.full_name} ${d.wing} ${d.company || ""}`.toLowerCase(); return words.every((w) => s.includes(w)); }).slice(0, 30);
+      dResults.innerHTML = hits.length ? hits.map((d) => `<button type="button" class="dir-item" data-id="${d.id}"><b>${esc(d.full_name)}</b><span>${esc(d.wing)}${d.company ? " · " + esc(d.company) : ""}</span></button>`).join("")
+        : '<div class="small muted">No match. Check the spelling, or use “Not in the list? Type the name”.</div>';
+      App.$$(".dir-item", dResults).forEach((b) => (b.onclick = () => choose(directory.find((d) => String(d.id) === b.dataset.id))));
+    };
+    const choose = (d) => {
+      dirChoice = d;
+      dSearch.closest("label").classList.toggle("hidden", !!d);
+      dResults.classList.toggle("hidden", !!d);
+      dChosen.classList.toggle("hidden", !d);
+      if (d) {
+        dChosen.innerHTML = `✔ <b>${esc(d.full_name)}</b> · ${esc(d.wing)}${d.company ? " · " + esc(d.company) : ""} <button type="button" class="btn ghost sm" id="f-dchange">Change</button>`;
+        App.$("#f-dchange", dChosen).onclick = () => { choose(null); dSearch.focus(); };
+      } else showResults();
+    };
+    async function loadDirectory() {
+      if (directory || !dSearch) return;
+      dResults.innerHTML = App.loadingHTML;
+      try { directory = await App.cachedRpc("list_gpbo_directory", null, 300000); } catch (e) { directory = []; App.toast(App.errMsg(e), "bad"); }
+      showResults();
+    }
+    if (dSearch) {
+      dSearch.oninput = showResults;
+      App.$("#f-manual-btn", area).onclick = () => {
+        manual = !manual;
+        App.$("#f-manual", area).classList.toggle("hidden", !manual);
+        App.$("#f-manual-btn", area).textContent = manual ? "Search the GPBO list instead" : "Not in the list? Type the name";
+        dSearch.closest("label").classList.toggle("hidden", manual || !!dirChoice);
+        dResults.classList.toggle("hidden", manual || !!dirChoice);
+        dChosen.classList.toggle("hidden", manual || !dirChoice);
+      };
+    }
     const amt = App.$("#f-amount", area);
     const updAmt = () => { if (amt) App.$("#f-amt-pts", area).textContent = `Points: ${App.calcPoints(category, amt.value)} ${amt.value ? "(" + App.fmtINR(amt.value) + ")" : ""}`; };
     if (amt) amt.oninput = updAmt;
@@ -436,6 +486,7 @@
     }
     // photo pickers (meeting photo, GPBO app screenshot)
     const blobs = {};
+    const busy = {};   // photos still being prepared
     App.$$(".photo-drop[data-key]", area).forEach((box) => {
       const key = box.dataset.key, input = App.$("input[type=file]", box), btn = App.$("button", box), prev = App.$("img", box);
       const label = btn.textContent;
@@ -446,6 +497,7 @@
         prev.classList.add("hidden");
         if (!f) return;
         btn.disabled = true; btn.textContent = "Processing…";
+        busy[key] = new Promise((done) => (busy[key + "_done"] = done));
         try {
           blobs[key] = await App.preparePhoto(f, key === "shot" ? 2000 : 1600);
           prev.src = URL.createObjectURL(blobs[key]);
@@ -453,6 +505,7 @@
           btn.textContent = "🔄 Change";
         } catch (e) { App.toast(App.errMsg(e), "bad"); input.value = ""; btn.textContent = label; }
         btn.disabled = false;
+        busy[key + "_done"](); delete busy[key]; delete busy[key + "_done"];
       };
     });
     const uploadBlob = async (key, folder) => {
@@ -472,6 +525,8 @@
       if (!date) return fail("Please choose the date.");
       btn.disabled = true; btn.textContent = "Submitting…";
       try {
+        // wait if a photo is still being prepared
+        await Promise.all(Object.keys(busy).filter((k) => !k.endsWith("_done")).map((k) => busy[k]));
         const uid = App.profile.id;
         const needShot = type !== "challenge" && s.require_app_screenshot !== false;
         const checkShot = () => { if (needShot && !blobs.shot) throw new Error("Please upload the screenshot of this entry from the GPBO app."); };
@@ -488,10 +543,14 @@
           const args = { p_category: category, p_txn_date: date, p_description: val("f-desc"), p_notes: val("f-notes") || null };
           if (type === "p2p" && p2pScope === "outside") {
             args.p_p2p_scope = "outside";
-            args.p_partner_name = val("f-pname");
-            args.p_partner_wing = val("f-pwing");
-            if (args.p_partner_name.length < 2) throw new Error("Please enter the name of the GPBO member you met.");
-            if (args.p_partner_wing.length < 2) throw new Error("Please enter their GPBO wing.");
+            if (!manual && dirChoice) args.p_gpbo_member_id = dirChoice.id;
+            else if (!manual) throw new Error("Please search and select the GPBO member you met (or tap “Not in the list? Type the name”).");
+            else {
+              args.p_partner_name = val("f-pname");
+              args.p_partner_wing = val("f-pwing");
+              if (args.p_partner_name.length < 2) throw new Error("Please enter the name of the GPBO member you met.");
+              if (args.p_partner_wing.length < 2) throw new Error("Please enter their GPBO wing.");
+            }
           } else if (type !== "challenge") {
             args.p_partner_id = val("f-partner");
             if (!args.p_partner_id) throw new Error("Please choose the member.");
@@ -551,9 +610,11 @@
     if (a.attendance) bits.push(`${a.attendance} attendance`);
     if (a.activities) bits.push(`${a.activities} activities`);
     if (a.challenges) bits.push(`${a.challenges} challenge${a.challenges > 1 ? "s" : ""}`);
+    if (a.group_organized) bits.push(`${a.group_organized} group mtg organized`);
+    if (a.group_attended) bits.push(`${a.group_attended} group mtg attended`);
     return bits.join(" · ");
   };
-  App.lbAchievements = (r) => App.achievementsText({ p2p: r.p2p, ref_given: r.ref_given, ref_received: r.ref_received, biz_given_amount: r.biz_given_amount, biz_received_amount: r.biz_received_amount, visitors: r.visitors, inductions: r.inductions, new_member: r.new_member, attendance: r.attendance, activities: r.activities, challenges: r.challenges });
+  App.lbAchievements = (r) => App.achievementsText({ p2p: r.p2p, ref_given: r.ref_given, ref_received: r.ref_received, biz_given_amount: r.biz_given_amount, biz_received_amount: r.biz_received_amount, visitors: r.visitors, inductions: r.inductions, new_member: r.new_member, attendance: r.attendance, activities: r.activities, challenges: r.challenges, group_organized: r.group_organized, group_attended: r.group_attended });
 
   App.renderFinalResult = (finals, awards) => `
     <div class="final-banner"><div class="l1">IGNITER BUSINESS &amp; P2P LEAGUE</div><div class="l2">${App.weeks.length}-WEEK FINAL RESULT</div></div>
